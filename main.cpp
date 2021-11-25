@@ -6,6 +6,7 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <queue>
 
 enum OpCodes {
     J, BEQ, BNE, BGTZ, SW, LW, BREAK, ADD, SUB, AND, OR, SRL, SRA, MUL, ADDI, ANDI, ORI
@@ -19,6 +20,53 @@ struct Instruction {
 
     Instruction(std::string name, OpCodes opCode, int category, std::vector<int> args);
 };
+struct State {
+    std::array<int, 32> registers = {};
+    std::unordered_map<int, int> data;
+    int address = 260;
+    int firstDataAddress = 0;
+    Instruction *currentInstruction = nullptr;
+    std::queue<Instruction*> buf1;
+    std::queue<Instruction*> buf2;
+    std::queue<Instruction*> buf3;
+    std::queue<Instruction*> buf4;
+    Instruction *buf5;
+    Instruction *buf6;
+    Instruction *buf7;
+    Instruction *buf8;
+    Instruction *buf9;
+    Instruction *buf10;
+    void fetch(std::unordered_map<int, Instruction> &instructions);
+    void issue();
+    void loadAndStore();
+    void arithmetic();
+    void multiply();
+    void writeBack();
+};
+
+void State::fetch(std::unordered_map<int, Instruction> &instructions) {
+
+}
+
+void State::issue() {
+
+}
+
+void State::loadAndStore() {
+
+}
+
+void State::arithmetic() {
+
+}
+
+void State::multiply() {
+
+}
+
+void State::writeBack() {
+
+}
 
 Instruction::Instruction(std::string name, OpCodes opCode, int category, std::vector<int> args) :
         name(std::move(name)), opCode(opCode), category(category), args(std::move(args)) {}
@@ -229,87 +277,104 @@ void category3(OpCodeMap &opCodeMap, const std::string &line,
     instructions.emplace(address, instruction);
 }
 
+void writeRegisters(std::array<int, 32> &registers, std::ofstream &simFile) {
+    simFile << "Registers\n";
+    for (int i = 0; i < 4; ++i) {
+        simFile << "R" << std::setw(2) << std::setfill('0') << i * 8 << ":";
+        for (int j = 0; j < 8; ++j) {
+            simFile << '\t' << registers[(i * 8) + j];
+        }
+        simFile << '\n';
+    }
+}
+void writeData(std::unordered_map<int, int> &data, std::ofstream &simFile, int dataAddress) {
+    simFile << "\nData";
+    for (size_t i = 0; i < data.size(); ++i) {
+        if (i % 8 == 0)
+            simFile << "\n" << dataAddress << ":";
+        simFile << "\t" << data[dataAddress];
+        dataAddress += 4;
+    }
+    simFile << "\n\n";
+}
+void decodeData(State &state, std::vector<std::string> &binaryInstructions, OpCodeMap &opCodeMap, std::unordered_map<int, Instruction> &instructions) {
+    bool isBreak = false;
+    for (auto &binaryLine: binaryInstructions) { // loop till data section
+        if (binaryLine.substr(0, 6) == "000110" && !isBreak) {
+            state.firstDataAddress = state.address + 4;
+            isBreak = true;
+        } else if (isBreak) {
+            state.data[state.address] = (int) std::stoul(binaryLine.substr(0, 32), nullptr, 2);
+        }
+        state.address += 4;
+    }
+    state.address = 260;
+    for (auto &binaryLine: binaryInstructions) {
+        if (state.address < state.firstDataAddress) {
+            std::string category = binaryLine.substr(0, 3);
+            if (category == "000")
+                category1(opCodeMap, binaryLine, instructions, state.address);
+            else if (category == "001")
+                category2(opCodeMap, binaryLine, instructions, state.address);
+            else if (category == "010")
+                category3(opCodeMap, binaryLine, instructions, state.address);
+        } else {
+            // Todo might need to add a break
+        }
+        state.address += 4;
+    }
+    state.address = 260;
+}
+
+void calculate(State &state) {
+    switch (state.currentInstruction->category) {
+        case 1:
+            calculate1(*state.currentInstruction, state.registers, state.data, state.address);
+            break;
+        case 2:
+            calculate2(*state.currentInstruction, state.registers);
+            state.address += 4;
+            break;
+        case 3:
+            calculate3(*state.currentInstruction, state.registers);
+            state.address += 4;
+            break;
+    }
+}
+
 int main(int argc, char** argv) {
     OpCodeMap opCodeMap;
     int address = 260;
     std::ifstream inputFile(argv[1]);
     std::ofstream simFile("simulation.txt");
-    std::array<int, 32> registers = {};
-    std::unordered_map<int, int> data;
+    State state;
     std::vector<std::string> binaryInstructions;
     std::unordered_map<int, Instruction> instructions;
     std::string line;
-    bool isBreak = false;
-    int firstDataAddress = 0;
 
     while (std::getline(inputFile, line)) {
         binaryInstructions.push_back(line);
     }
     inputFile.close();
 
-    for (auto &binaryLine: binaryInstructions) { // loop till data section
-        if (binaryLine.substr(0, 6) == "000110" && !isBreak) {
-            firstDataAddress = address + 4;
-            isBreak = true;
-        } else if (isBreak) {
-            data[address] = (int) std::stoul(binaryLine.substr(0, 32), nullptr, 2);
-        }
-        address += 4;
-    }
-    address = 260;
+    decodeData(state, binaryInstructions, opCodeMap, instructions);
 
-    for (auto &binaryLine: binaryInstructions) {
-        if (address < firstDataAddress) {
-            std::string category = binaryLine.substr(0, 3);
-            if (category == "000")
-                category1(opCodeMap, binaryLine, instructions, address);
-            else if (category == "001")
-                category2(opCodeMap, binaryLine, instructions, address);
-            else if (category == "010")
-                category3(opCodeMap, binaryLine, instructions, address);
-        } else {
-            // Todo might need to add a break
-        }
-        address += 4;
-    }
-
-    address = 260;
     int cycle = 1;
-    while (address < firstDataAddress) {
+
+    while (true) {
         Instruction instruction = instructions.at(address);
         simFile << std::string(20, '-') << '\n';
-        simFile << "Cycle " << cycle << ":\t" << address << '\t' << instruction.name << "\n\n";
-        switch (instruction.category) {
-            case 1:
-                calculate1(instruction, registers, data, address);
-                break;
-            case 2:
-                calculate2(instruction, registers);
-                address += 4;
-                break;
-            case 3:
-                calculate3(instruction, registers);
-                address += 4;
-                break;
-        }
-        simFile << "Registers\n";
-        for (int i = 0; i < 4; ++i) {
-            simFile << "R" << std::setw(2) << std::setfill('0') << i * 8 << ":";
-            for (int j = 0; j < 8; ++j) {
-                simFile << '\t' << registers[(i * 8) + j];
-            }
-            simFile << '\n';
-        }
+        simFile << "Cycle " << cycle << ':' << "\n\n";
+        state.fetch(instructions);
+        state.issue();
+        state.loadAndStore();
+        state.arithmetic();
+        state.multiply();
+        state.writeBack();
+        writeRegisters(state.registers, simFile);
+        writeData(state.data, simFile, state.firstDataAddress);
         cycle++;
-        int dataAddress = firstDataAddress;
-        simFile << "\nData";
-        for (size_t i = 0; i < data.size(); ++i) {
-            if (i % 8 == 0)
-                simFile << "\n" << dataAddress << ":";
-            simFile << "\t" << data[dataAddress];
-            dataAddress += 4;
-        }
-        simFile << "\n\n";
+        break;
     }
     simFile.close();
     return 0;
