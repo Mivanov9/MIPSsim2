@@ -21,10 +21,6 @@ struct Instruction {
     Instruction(std::string name, OpCodes opCode, int category, std::vector<int> args);
 };
 class State {
-    std::array<int, 32> registers = {};
-    std::unordered_map<int, int> data;
-    int address = 260;
-    int firstDataAddress = 0;
     bool foundBreak = false;
     Instruction *currentInstruction = nullptr;
     Instruction *waitInstruction = nullptr;
@@ -33,23 +29,32 @@ class State {
     std::queue<Instruction*> buf2;
     std::queue<Instruction*> buf3;
     std::queue<Instruction*> buf4;
-    Instruction *buf5;
-    Instruction *buf6;
-    Instruction *buf7;
-    Instruction *buf8;
-    Instruction *buf9;
-    Instruction *buf10;
+    Instruction *buf5{};
+    Instruction *buf6{};
+    Instruction *buf7{};
+    Instruction *buf8{};
+    Instruction *buf9{};
+    Instruction *buf10{};
     void calculate1();
     void calculate2();
     void calculate3();
     void calculate();
+    static bool isBranch(Instruction &instruction);
 public:
+    std::array<int, 32> registers = {};
+    std::unordered_map<int, int> data;
+    int address = 260;
+    int firstDataAddress = 0;
     void fetch(std::unordered_map<int, Instruction> &instructions);
     void issue();
     void loadAndStore();
     void arithmetic();
     void multiply();
     void writeBack();
+    void writeRegisters(std::ofstream &simFile);
+    void writeData(std::ofstream &simFile);
+
+    void writeState(std::ofstream &simFile);
 };
 
 void State::calculate() {
@@ -65,7 +70,7 @@ void State::calculate() {
             break;
     }
 }
-bool isBranch(Instruction &instruction) {
+bool State::isBranch(Instruction &instruction) {
     OpCodes op = instruction.opCode;
     return op == BEQ || op == BNE || op == BGTZ;
 }
@@ -115,21 +120,15 @@ void State::calculate1() {
             break;
         case BEQ:
             if (registers[src1] == registers[src2])
-                address += src3 + 4;
-            else
-                address += 4;
+                address += src3;
             break;
         case BNE:
             if (registers[src1] != registers[src2])
-                address += src3 + 4;
-            else
-                address += 4;
+                address += src3;
             break;
         case BGTZ:
             if (registers[src1] > 0)
-                address += src2 + 4;
-            else
-                address += 4;
+                address += src2;
             break;
         case SW:
             data[registers[src1] + src3] = registers[src2];
@@ -313,7 +312,7 @@ void category3(OpCodeMap &opCodeMap, const std::string &line,
     instructions.emplace(address, instruction);
 }
 
-void writeRegisters(std::array<int, 32> &registers, std::ofstream &simFile) {
+void State::writeRegisters(std::ofstream &simFile) {
     simFile << "Registers\n";
     for (int i = 0; i < 4; ++i) {
         simFile << "R" << std::setw(2) << std::setfill('0') << i * 8 << ":";
@@ -323,16 +322,34 @@ void writeRegisters(std::array<int, 32> &registers, std::ofstream &simFile) {
         simFile << '\n';
     }
 }
-void writeData(std::unordered_map<int, int> &data, std::ofstream &simFile, int dataAddress) {
+void State::writeData(std::ofstream &simFile) {
     simFile << "\nData";
     for (size_t i = 0; i < data.size(); ++i) {
         if (i % 8 == 0)
-            simFile << "\n" << dataAddress << ":";
-        simFile << "\t" << data[dataAddress];
-        dataAddress += 4;
+            simFile << "\n" << firstDataAddress << ":";
+        simFile << "\t" << data[firstDataAddress];
+        firstDataAddress += 4;
     }
     simFile << "\n\n";
 }
+
+void State::writeState(std::ofstream &simFile) {
+    simFile << "IF:\n";
+    simFile << "\tWaiting: [" << (waitInstruction == nullptr ? "" : waitInstruction->name) << "]\n";
+    simFile << "\tExecuted: [" << (exeInstruction == nullptr ? "" : exeInstruction->name) << "]\n";
+    simFile << "Buf1:\n";
+    std::queue<Instruction*> temp;
+    temp = buf1;
+    for (int i = 0; i < 8; ++i) {
+        simFile << "\tEntry " << i << ':';
+        if (!temp.empty()) {
+            simFile << " [" << temp.front()->name << ']';
+            temp.pop();
+        }
+        simFile << '\n';
+    }
+}
+
 void decodeData(State &state, std::vector<std::string> &binaryInstructions, OpCodeMap &opCodeMap, std::unordered_map<int, Instruction> &instructions) {
     bool isBreak = false;
     for (auto &binaryLine: binaryInstructions) { // loop till data section
@@ -392,8 +409,9 @@ int main(int argc, char** argv) {
         state.arithmetic();
         state.multiply();
         state.writeBack();
-        writeRegisters(state.registers, simFile);
-        writeData(state.data, simFile, state.firstDataAddress);
+        state.writeState(simFile);
+        state.writeRegisters(simFile);
+        state.writeData(simFile);
         cycle++;
         break;
     }
