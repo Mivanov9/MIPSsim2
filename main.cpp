@@ -20,12 +20,15 @@ struct Instruction {
 
     Instruction(std::string name, OpCodes opCode, int category, std::vector<int> args);
 };
-struct State {
+class State {
     std::array<int, 32> registers = {};
     std::unordered_map<int, int> data;
     int address = 260;
     int firstDataAddress = 0;
+    bool foundBreak = false;
     Instruction *currentInstruction = nullptr;
+    Instruction *waitInstruction = nullptr;
+    Instruction *exeInstruction = nullptr;
     std::queue<Instruction*> buf1;
     std::queue<Instruction*> buf2;
     std::queue<Instruction*> buf3;
@@ -36,6 +39,11 @@ struct State {
     Instruction *buf8;
     Instruction *buf9;
     Instruction *buf10;
+    void calculate1();
+    void calculate2();
+    void calculate3();
+    void calculate();
+public:
     void fetch(std::unordered_map<int, Instruction> &instructions);
     void issue();
     void loadAndStore();
@@ -44,8 +52,37 @@ struct State {
     void writeBack();
 };
 
-void State::fetch(std::unordered_map<int, Instruction> &instructions) {
+void State::calculate() {
+    switch (currentInstruction->category) {
+        case 1:
+            calculate1();
+            break;
+        case 2:
+            calculate2();
+            break;
+        case 3:
+            calculate3();
+            break;
+    }
+}
+bool isBranch(Instruction &instruction) {
+    OpCodes op = instruction.opCode;
+    return op == BEQ || op == BNE || op == BGTZ;
+}
 
+void State::fetch(std::unordered_map<int, Instruction> &instructions) {
+    for (int i = 0; i < 4; ++i) {
+        Instruction &instruction = instructions.at(address);
+        if(buf1.size() < 8 && waitInstruction == nullptr && !foundBreak) {
+            if (isBranch(instruction)) {
+                waitInstruction = &instruction;
+            } else {
+                buf1.push(&instruction);
+            }
+            address += 4;
+        } else
+            break;
+    }
 }
 
 void State::issue() {
@@ -66,6 +103,98 @@ void State::multiply() {
 
 void State::writeBack() {
 
+}
+
+void State::calculate1() {
+    int src1 = currentInstruction->args[0];
+    int src2 = currentInstruction->args[1];
+    int src3 = currentInstruction->args[2];
+    switch (currentInstruction->opCode) {
+        case J:
+            address = src1;
+            break;
+        case BEQ:
+            if (registers[src1] == registers[src2])
+                address += src3 + 4;
+            else
+                address += 4;
+            break;
+        case BNE:
+            if (registers[src1] != registers[src2])
+                address += src3 + 4;
+            else
+                address += 4;
+            break;
+        case BGTZ:
+            if (registers[src1] > 0)
+                address += src2 + 4;
+            else
+                address += 4;
+            break;
+        case SW:
+            data[registers[src1] + src3] = registers[src2];
+            break;
+        case LW:
+            registers[src2] = data[registers[src1] + src3];
+            break;
+        case BREAK:
+            foundBreak = true;
+            break;
+        default:
+            break;
+    }
+}
+
+void State::calculate2() {
+    // dest src1 src2
+    int dest = currentInstruction->args[0];
+    int src1 = currentInstruction->args[1];
+    int src2 = currentInstruction->args[2];
+    switch (currentInstruction->opCode) {
+        case ADD:
+            registers[dest] = registers[src1] + registers[src2];
+            break;
+        case SUB:
+            registers[dest] = registers[src1] - registers[src2];
+            break;
+        case AND:
+            registers[dest] = registers[src1] & registers[src2];
+            break;
+        case OR:
+            registers[dest] = registers[src1] | registers[src2];
+            break;
+        case SRL:
+            registers[dest] = registers[src1] << src2;
+            break;
+        case SRA:
+            registers[dest] = registers[src1] >> src2;
+            break;
+        case MUL:
+            registers[dest] = registers[src1] * registers[src2];
+            break;
+        default:
+            break;
+    }
+}
+
+void State::calculate3() {
+    // dest src1 imm
+    int dest = currentInstruction->args[0];
+    int src1 = currentInstruction->args[1];
+    int immediate = currentInstruction->args[2];
+    switch (currentInstruction->opCode) {
+        case ADDI:
+            registers[dest] = registers[src1] + immediate;
+            break;
+        case ANDI:
+            registers[dest] = registers[src1] & immediate;
+            break;
+        case ORI:
+            registers[dest] = registers[src1] | immediate;
+            break;
+        default:
+            break;
+    }
 }
 
 Instruction::Instruction(std::string name, OpCodes opCode, int category, std::vector<int> args) :
@@ -96,99 +225,6 @@ struct OpCodeMap {
             {"010", std::make_pair("ORI", ORI)}
     };
 };
-
-void calculate1(Instruction &instruction, std::array<int, 32> &registers, std::unordered_map<int, int> &data, int &address) {
-    int src1 = instruction.args[0];
-    int src2 = instruction.args[1];
-    int src3 = instruction.args[2];
-    switch (instruction.opCode) {
-        case J:
-            address = src1;
-            break;
-        case BEQ:
-            if (registers[src1] == registers[src2])
-                address += src3 + 4;
-            else
-                address += 4;
-            break;
-        case BNE:
-            if (registers[src1] != registers[src2])
-                address += src3 + 4;
-            else
-                address += 4;
-            break;
-        case BGTZ:
-            if (registers[src1] > 0)
-                address += src2 + 4;
-            else
-                address += 4;
-            break;
-        case SW:
-            data[registers[src1] + src3] = registers[src2];
-            address += 4;
-            break;
-        case LW:
-            registers[src2] = data[registers[src1] + src3];
-            address += 4;
-            break;
-        case BREAK:
-            address += 4;
-        default:
-            break;
-    }
-}
-
-void calculate2(Instruction &instruction, std::array<int, 32> &registers) {
-    // dest src1 src2
-    int dest = instruction.args[0];
-    int src1 = instruction.args[1];
-    int src2 = instruction.args[2];
-    switch (instruction.opCode) {
-        case ADD:
-            registers[dest] = registers[src1] + registers[src2];
-            break;
-        case SUB:
-            registers[dest] = registers[src1] - registers[src2];
-            break;
-        case AND:
-            registers[dest] = registers[src1] & registers[src2];
-            break;
-        case OR:
-            registers[dest] = registers[src1] | registers[src2];
-            break;
-        case SRL:
-            registers[dest] = registers[src1] << src2;
-            break;
-        case SRA:
-            registers[dest] = registers[src1] >> src2;
-            break;
-        case MUL:
-            registers[dest] = registers[src1] * registers[src2];
-            break;
-        default:
-            break;
-    }
-}
-
-void calculate3(Instruction &instruction, std::array<int, 32> &registers) {
-    // dest src1 imm
-    int dest = instruction.args[0];
-    int src1 = instruction.args[1];
-    int immediate = instruction.args[2];
-    switch (instruction.opCode) {
-        case ADDI:
-            registers[dest] = registers[src1] + immediate;
-            break;
-        case ANDI:
-            registers[dest] = registers[src1] & immediate;
-            break;
-        case ORI:
-            registers[dest] = registers[src1] | immediate;
-            break;
-        default:
-            break;
-    }
-}
 
 void category1(OpCodeMap &opCodeMap, const std::string &line,
                std::unordered_map<int, Instruction> &instructions, int address) {
@@ -326,21 +362,6 @@ void decodeData(State &state, std::vector<std::string> &binaryInstructions, OpCo
     state.address = 260;
 }
 
-void calculate(State &state) {
-    switch (state.currentInstruction->category) {
-        case 1:
-            calculate1(*state.currentInstruction, state.registers, state.data, state.address);
-            break;
-        case 2:
-            calculate2(*state.currentInstruction, state.registers);
-            state.address += 4;
-            break;
-        case 3:
-            calculate3(*state.currentInstruction, state.registers);
-            state.address += 4;
-            break;
-    }
-}
 
 int main(int argc, char** argv) {
     OpCodeMap opCodeMap;
