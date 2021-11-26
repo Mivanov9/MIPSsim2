@@ -6,7 +6,7 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
-#include <queue>
+#include <deque>
 
 enum OpCodes {
     J, BEQ, BNE, BGTZ, SW, LW, BREAK, ADD, SUB, AND, OR, SRL, SRA, MUL, ADDI, ANDI, ORI
@@ -25,16 +25,16 @@ class State {
     Instruction *currentInstruction = nullptr;
     Instruction *waitInstruction = nullptr;
     Instruction *exeInstruction = nullptr;
-    std::queue<Instruction*> buf1;
-    std::queue<Instruction*> buf2;
-    std::queue<Instruction*> buf3;
-    std::queue<Instruction*> buf4;
-    Instruction *buf5{};
-    Instruction *buf6{};
-    Instruction *buf7{};
-    Instruction *buf8{};
-    Instruction *buf9{};
-    Instruction *buf10{};
+    std::deque<Instruction*> buf1;
+    std::deque<Instruction*> buf2;
+    std::deque<Instruction*> buf3;
+    std::deque<Instruction*> buf4;
+    Instruction *buf5 = nullptr;
+    Instruction *buf6 = nullptr;
+    Instruction *buf7 = nullptr;
+    Instruction *buf8 = nullptr;
+    Instruction *buf9 = nullptr;
+    Instruction *buf10 = nullptr;
     void calculate1();
     void calculate2();
     void calculate3();
@@ -53,7 +53,6 @@ public:
     void writeBack();
     void writeRegisters(std::ofstream &simFile);
     void writeData(std::ofstream &simFile);
-
     void writeState(std::ofstream &simFile);
 };
 
@@ -82,7 +81,7 @@ void State::fetch(std::unordered_map<int, Instruction> &instructions) {
             if (isBranch(instruction)) {
                 waitInstruction = &instruction;
             } else {
-                buf1.push(&instruction);
+                buf1.push_back(&instruction);
             }
             address += 4;
         } else
@@ -338,13 +337,12 @@ void State::writeState(std::ofstream &simFile) {
     simFile << "\tWaiting: [" << (waitInstruction == nullptr ? "" : waitInstruction->name) << "]\n";
     simFile << "\tExecuted: [" << (exeInstruction == nullptr ? "" : exeInstruction->name) << "]\n";
     simFile << "Buf1:\n";
-    std::queue<Instruction*> temp;
-    temp = buf1;
+    auto iter = buf1.begin();
     for (int i = 0; i < 8; ++i) {
         simFile << "\tEntry " << i << ':';
-        if (!temp.empty()) {
-            simFile << " [" << temp.front()->name << ']';
-            temp.pop();
+        if (iter != buf1.end()) {
+            simFile << " [" << (*iter)->name << ']';
+            iter++;
         }
         simFile << '\n';
     }
