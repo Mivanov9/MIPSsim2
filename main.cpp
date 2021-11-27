@@ -21,36 +21,35 @@ struct Instruction {
     int immediate{};
     std::vector<int> dependencies;
     int address{};
+    bool empty = true;
     Instruction();
     Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int immediate = 0);
 };
 
 class State {
     bool foundBreak = false;
-    Instruction *currentInstruction = nullptr;
-    Instruction *waitInstruction = nullptr;
-    Instruction *exeInstruction = nullptr;
-    std::vector<int> branchDependencies;
-    std::deque<Instruction*> buf1;
-    std::deque<Instruction*> buf2;
-    std::deque<Instruction*> buf3;
-    std::deque<Instruction*> buf4;
-    Instruction *buf5 = nullptr;
-    Instruction *buf6 = nullptr;
-    Instruction *buf7 = nullptr;
-    Instruction *buf8 = nullptr;
-    Instruction *buf9 = nullptr;
-    Instruction *buf10 = nullptr;
-    void calculate1();
-    void calculate2();
-    void calculate3();
-    void calculate();
+    Instruction waitInstruction;
+    Instruction exeInstruction;
+    std::deque<Instruction> buf1;
+    std::deque<Instruction> buf2;
+    std::deque<Instruction> buf3;
+    std::deque<Instruction> buf4;
+    Instruction buf5;
+    Instruction buf6;
+    Instruction buf7;
+    Instruction buf8;
+    Instruction buf9;
+    Instruction buf10;
+    void calculate1(Instruction &instruction);
+    void calculate2(Instruction &instruction);
+    void calculate3(Instruction &instruction);
+    void calculate(Instruction &instruction);
 public:
     std::array<int, 32> registers = {};
     std::unordered_map<int, int> data;
     int address = 260;
     int firstDataAddress = 0;
-    void fetch(std::unordered_map<int, Instruction> &instructions);
+    void fetch(std::unordered_map<int, Instruction> &instructions, State &prevStat);
     void issue(State &prevStat, std::array<bool, 32> &registersWritten);
     void loadAndStore();
     void arithmetic(State &prevStat);
@@ -63,18 +62,18 @@ public:
     void cleanUp();
 };
 
-void removeInstruction(std::deque<Instruction*> &buf, int address);
+void removeInstruction(std::deque<Instruction> &buf, int address);
 
-void State::calculate() {
-    switch (currentInstruction->category) {
+void State::calculate(Instruction &instruction) {
+    switch (instruction.category) {
         case 1:
-            calculate1();
+            calculate1(instruction);
             break;
         case 2:
-            calculate2();
+            calculate2(instruction);
             break;
         case 3:
-            calculate3();
+            calculate3(instruction);
             break;
     }
 }
@@ -82,42 +81,50 @@ bool isBranch(Instruction &instruction) {
     OpCodes op = instruction.opCode;
     return op == J || op == BEQ || op == BNE || op == BGTZ;
 }
-void findDependencies(Instruction &instruction, std::deque<Instruction*> &buf){
+void findDependencies(Instruction &instruction, std::deque<Instruction> &buf){
     for (auto bufInstruction : buf) {
-        if (bufInstruction->args.empty() || (bufInstruction->category == 1 && bufInstruction->opCode != LW))
+        if (bufInstruction.args.empty() || (bufInstruction.category == 1 && bufInstruction.opCode != LW))
             continue;
-        int dependency = bufInstruction->args[0];
+        int dependency;
+        if (bufInstruction.opCode == LW)
+            dependency = bufInstruction.args[1];
+        else
+            dependency = bufInstruction.args[0];
         auto &args = instruction.args;
         if (std::any_of(args.begin(), args.end(),[dependency](auto arg){return arg == dependency;})) {
-            instruction.dependencies.push_back(bufInstruction->address);
+            instruction.dependencies.push_back(bufInstruction.address);
         }
     }
 }
 
-void State::fetch(std::unordered_map<int, Instruction> &instructions) {
+void State::fetch(std::unordered_map<int, Instruction> &instructions, State &prevStat) {
     for (int i = 0; i < 4; ++i) {
         Instruction &instruction = instructions.at(address);
-        if(buf1.size() < 8 && waitInstruction == nullptr && exeInstruction == nullptr && !foundBreak) {
+        if(buf1.size() < 8 && waitInstruction.empty && exeInstruction.empty && !foundBreak) {
             findDependencies(instruction, buf1);
             if (isBranch(instruction)) {
                 if (instruction.dependencies.empty()) {
-                    exeInstruction = &instruction;
-                    currentInstruction = exeInstruction;
-                    calculate(); //Todo remove this and above
+                    exeInstruction = instruction;
+                    exeInstruction.empty = false;
                     return;
-                } else
-                    waitInstruction = &instruction;
+                } else {
+                    waitInstruction = instruction;
+                    waitInstruction.empty = false;
+                }
             } else {
-                buf1.push_back(&instruction);
+                buf1.push_back(instruction);
             }
             address += 4;
         } else
             break;
     }
-    //Todo do the same but with exe
-    if (waitInstruction && waitInstruction->dependencies.empty()) {
+    if (!exeInstruction.empty) {
+        calculate(exeInstruction);
+        return;
+    }
+    if (!prevStat.waitInstruction.empty && !waitInstruction.empty && prevStat.waitInstruction.dependencies.empty()) {
         exeInstruction = waitInstruction;
-        waitInstruction = nullptr;
+        waitInstruction.empty = true;
     }
 }
 
@@ -130,10 +137,9 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
     for (int i = 0; i < 6; ++i, ++pBuf1Iter) {
         if (pBuf1Iter == pBuf1.end())
             return;
-        auto op = (*pBuf1Iter)->opCode;
-//        int dest = (*pBuf1Iter)->args[0];
-//        int src1 = (*pBuf1Iter)->args[1];
-//        int src2 = (*pBuf1Iter)->args[2];
+        if (!pBuf1Iter->dependencies.empty())
+            continue;
+        auto op = (*pBuf1Iter).opCode;
         if (op != LW && op != SW) {
             // RAW && WAW
 //            if (registersWritten[src1] || registersWritten[src2])
@@ -149,15 +155,20 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
                 }
                 buf3.push_back(*pBuf1Iter);
             }
-            removeInstruction(buf1, (*pBuf1Iter)->address);
+
             //registersWritten[dest] = true;
-            continue;
-        }
-        if (op == LW) {
-            auto SWLambda = [](Instruction* instruction) {return instruction->opCode == SW;};
+        } else if (op == LW) {
+            auto SWLambda = [](Instruction &instruction) {return instruction.opCode == SW;};
             if (std::any_of(pBuf1.begin(), pBuf1Iter, SWLambda))
                 continue;
+            buf2.push_back(*pBuf1Iter);
+        } else {
+            auto SWLambda = [](Instruction &instruction) {return instruction.opCode == SW;};
+            if (std::any_of(pBuf1.begin(), pBuf1Iter, SWLambda))
+                continue;
+            buf2.push_back(*pBuf1Iter);
         }
+        removeInstruction(buf1, (*pBuf1Iter).address);
     }
 }
 
@@ -165,8 +176,8 @@ void State::loadAndStore() {
 
 }
 
-void removeInstruction(std::deque<Instruction*> &buf, int address) {
-    auto findAddress = [address](Instruction *instruction) {return instruction->address == address;};
+void removeInstruction(std::deque<Instruction> &buf, int address) {
+    auto findAddress = [address](Instruction &instruction) {return instruction.address == address;};
     auto removeIter = std::find_if(buf.begin(), buf.end(), findAddress);
     buf.erase(removeIter);
 }
@@ -176,7 +187,7 @@ void State::arithmetic(State &prevStat) {
     if (pBuf3.empty())
         return;
     buf6 = pBuf3.front();
-    removeInstruction(buf3, buf6->address);
+    removeInstruction(buf3, buf6.address);
 }
 
 void State::multiply() {
@@ -186,41 +197,40 @@ void State::multiply() {
 void State::writeBack(std::array<bool, 32> &registersWritten) {
     int currentAddress = 0;
     auto removeDependency = [&currentAddress](int dAddress){return currentAddress == dAddress;};
-    auto removeDependencies = [removeDependency](Instruction *e){
-        auto removeIter = std::find_if(e->dependencies.begin(), e->dependencies.end(), removeDependency);
-        if (removeIter != e->dependencies.end())
-            e->dependencies.erase(removeIter);
+    auto removeDependencies = [removeDependency](Instruction &e){
+        auto removeIter = std::find_if(e.dependencies.begin(), e.dependencies.end(), removeDependency);
+        if (removeIter != e.dependencies.end())
+            e.dependencies.erase(removeIter);
     };
-    if (buf8) {
-        currentInstruction = buf8;
-        calculate();
+    if (!buf8.empty) {
+        calculate(buf8);
     }
-    if (buf6) {
-        currentInstruction = buf6;
-        registersWritten[buf6->args[0]] = false;
-        calculate();
-        currentAddress = buf6->address;
+    if (!buf6.empty) {
+        registersWritten[buf6.args[0]] = false;
+        calculate(buf6);
+        currentAddress = buf6.address;
         for (auto e : buf1) {
             removeDependencies(e);
         }
-        removeDependencies(waitInstruction);
+        if (!waitInstruction.empty)
+            removeDependencies(waitInstruction);
     }
-    if (buf10) {
-        currentInstruction = buf10;
-        calculate();
+    if (!buf10.empty) {
+        calculate(buf10);
     }
 }
 
 void State::cleanUp() {
-    buf8 = nullptr;
-    buf6 = nullptr;
-    buf10 = nullptr;
+    buf8.empty = true;
+    buf6.empty = true;
+    buf10.empty = true;
+    exeInstruction.empty = true;
 }
 
-void State::calculate1() {
-    auto &args = currentInstruction->args;
-    int intermediate = currentInstruction->immediate;
-    switch (currentInstruction->opCode) {
+void State::calculate1(Instruction &instruction) {
+    auto &args = instruction.args;
+    int intermediate = instruction.immediate;
+    switch (instruction.opCode) {
         case J:
             address = intermediate;
             break;
@@ -250,12 +260,12 @@ void State::calculate1() {
     }
 }
 
-void State::calculate2() {
+void State::calculate2(Instruction &instruction) {
     // dest src1 src2
-    int dest = currentInstruction->args[0];
-    int src1 = currentInstruction->args[1];
-    int src2 = currentInstruction->args.size() > 2 ? currentInstruction->args[2] : currentInstruction->immediate;
-    switch (currentInstruction->opCode) {
+    int dest = instruction.args[0];
+    int src1 = instruction.args[1];
+    int src2 = instruction.args.size() > 2 ? instruction.args[2] : instruction.immediate;
+    switch (instruction.opCode) {
         case ADD:
             registers[dest] = registers[src1] + registers[src2];
             break;
@@ -282,12 +292,12 @@ void State::calculate2() {
     }
 }
 
-void State::calculate3() {
+void State::calculate3(Instruction &instruction) {
     // dest src1 imm
-    int dest = currentInstruction->args[0];
-    int src1 = currentInstruction->args[1];
-    int immediate = currentInstruction->immediate;
-    switch (currentInstruction->opCode) {
+    int dest = instruction.args[0];
+    int src1 = instruction.args[1];
+    int immediate = instruction.immediate;
+    switch (instruction.opCode) {
         case ADDI:
             registers[dest] = registers[src1] + immediate;
             break;
@@ -303,7 +313,9 @@ void State::calculate3() {
 }
 
 Instruction::Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int immediate) :
-        name(std::move(name)), address(address), opCode(opCode), category(category), args(std::move(args)), immediate(immediate) {}
+        name(std::move(name)), address(address), opCode(opCode), category(category), args(std::move(args)), immediate(immediate) {
+    empty = false;
+}
 
 Instruction::Instruction() = default;
 
@@ -450,14 +462,14 @@ void State::writeData(std::ofstream &simFile) {
 
 void State::writeState(std::ofstream &simFile) {
     simFile << "IF:\n";
-    simFile << "\tWaiting:" << (waitInstruction == nullptr ? "" : " [" + waitInstruction->name + ']') << '\n';
-    simFile << "\tExecuted:" << (exeInstruction == nullptr ? "" : " [" + exeInstruction->name + ']') << '\n';
-    auto writeBufLambda = [&simFile](int size, std::deque<Instruction*> &buf){
+    simFile << "\tWaiting:" << (waitInstruction.empty ? "" : " [" + waitInstruction.name + ']') << '\n';
+    simFile << "\tExecuted:" << (exeInstruction.empty ? "" : " [" + exeInstruction.name + ']') << '\n';
+    auto writeBufLambda = [&simFile](int size, std::deque<Instruction> &buf){
         auto iter = buf.begin();
         for (int i = 0; i < size; ++i) {
             simFile << "\tEntry " << i << ':';
             if (iter != buf.end()) {
-                simFile << " [" << (*iter)->name << ']';
+                simFile << " [" << (*iter).name << ']';
                 iter++;
             }
             simFile << '\n';
@@ -471,12 +483,12 @@ void State::writeState(std::ofstream &simFile) {
     writeBufLambda(2, buf3);
     simFile << "Buf4:\n";
     writeBufLambda(2, buf4);
-    simFile << "Buf5:" << (buf5 ? " [" + buf5->name + ']' : "") << '\n';
-    simFile << "Buf6:" << (buf6 ? " [" + buf6->name + ']' : "") << '\n';
-    simFile << "Buf7:" << (buf7 ? " [" + buf7->name + ']' : "") << '\n';
-    simFile << "Buf8:" << (buf8 ? " [" + buf8->name + ']' : "") << '\n';
-    simFile << "Buf9:" << (buf9 ? " [" + buf9->name + ']' : "") << '\n';
-    simFile << "Buf10:" << (buf10 ? " [" + buf10->name + ']' : "") << '\n';
+    simFile << "Buf5:" << (!buf5.empty ? " [" + buf5.name + ']' : "") << '\n';
+    simFile << "Buf6:" << (!buf6.empty ? " [" + buf6.name + ']' : "") << '\n';
+    simFile << "Buf7:" << (!buf7.empty ? " [" + buf7.name + ']' : "") << '\n';
+    simFile << "Buf8:" << (!buf8.empty ? " [" + buf8.name + ']' : "") << '\n';
+    simFile << "Buf9:" << (!buf9.empty ? " [" + buf9.name + ']' : "") << '\n';
+    simFile << "Buf10:" << (!buf10.empty ? " [" + buf10.name + ']' : "") << '\n';
     simFile << '\n';
 }
 
@@ -512,7 +524,6 @@ void decodeData(State &state, std::vector<std::string> &binaryInstructions, OpCo
 
 int main(int argc, char** argv) {
     OpCodeMap opCodeMap;
-    int address = 260;
     std::ifstream inputFile(argv[1]);
     std::ofstream simFile("simulation.txt");
     State state;
@@ -532,20 +543,19 @@ int main(int argc, char** argv) {
     State prevState = state;
     std::array<bool, 32> registersWritten = {};
     for (int i = 0; i < 20; ++i) {
-        Instruction instruction = instructions.at(address);
         simFile << std::string(20, '-') << '\n';
         simFile << "Cycle " << cycle << ':' << "\n\n";
-        state.fetch(instructions);
+        state.fetch(instructions, prevState);
         state.issue(prevState, registersWritten);
         state.loadAndStore();
         state.arithmetic(prevState);
         state.multiply();
+        prevState = state;
         state.writeBack(registersWritten);
         state.writeState(simFile);
         state.writeRegisters(simFile);
         state.writeData(simFile);
         state.cleanUp();
-        prevState = state;
         cycle++;
     }
     simFile.close();
