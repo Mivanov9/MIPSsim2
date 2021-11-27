@@ -15,14 +15,14 @@ enum OpCodes {
 
 struct Instruction {
     std::string name;
-    OpCodes opCode;
-    int category;
+    OpCodes opCode{};
+    int category{};
     std::vector<int> args;
-    int intermediate;
+    int immediate{};
     std::vector<int> dependencies;
-    int address;
-
-    Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int intermediate = 0);
+    int address{};
+    Instruction();
+    Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int immediate = 0);
 };
 
 class State {
@@ -83,29 +83,41 @@ bool isBranch(Instruction &instruction) {
     return op == J || op == BEQ || op == BNE || op == BGTZ;
 }
 void findDependencies(Instruction &instruction, std::deque<Instruction*> &buf){
-    OpCodes op = instruction.opCode;
-    switch(op) {
-        case SW:
-
-            break;
-        default:
-            break;
+    for (auto bufInstruction : buf) {
+        if (bufInstruction->args.empty() || (bufInstruction->category == 1 && bufInstruction->opCode != LW))
+            continue;
+        int dependency = bufInstruction->args[0];
+        auto &args = instruction.args;
+        if (std::any_of(args.begin(), args.end(),[dependency](auto arg){return arg == dependency;})) {
+            instruction.dependencies.push_back(bufInstruction->address);
+        }
     }
 }
 
 void State::fetch(std::unordered_map<int, Instruction> &instructions) {
     for (int i = 0; i < 4; ++i) {
         Instruction &instruction = instructions.at(address);
-        if(buf1.size() < 8 && waitInstruction == nullptr && !foundBreak) {
+        if(buf1.size() < 8 && waitInstruction == nullptr && exeInstruction == nullptr && !foundBreak) {
             findDependencies(instruction, buf1);
             if (isBranch(instruction)) {
-                waitInstruction = &instruction;
+                if (instruction.dependencies.empty()) {
+                    exeInstruction = &instruction;
+                    currentInstruction = exeInstruction;
+                    calculate(); //Todo remove this and above
+                    return;
+                } else
+                    waitInstruction = &instruction;
             } else {
                 buf1.push_back(&instruction);
             }
             address += 4;
         } else
             break;
+    }
+    //Todo do the same but with exe
+    if (waitInstruction && waitInstruction->dependencies.empty()) {
+        exeInstruction = waitInstruction;
+        waitInstruction = nullptr;
     }
 }
 
@@ -119,13 +131,13 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
         if (pBuf1Iter == pBuf1.end())
             return;
         auto op = (*pBuf1Iter)->opCode;
-        int dest = (*pBuf1Iter)->args[0];
-        int src1 = (*pBuf1Iter)->args[1];
-        int src2 = (*pBuf1Iter)->args[2];
+//        int dest = (*pBuf1Iter)->args[0];
+//        int src1 = (*pBuf1Iter)->args[1];
+//        int src2 = (*pBuf1Iter)->args[2];
         if (op != LW && op != SW) {
             // RAW && WAW
-            if (registersWritten[src1] || registersWritten[src2])
-                continue;
+//            if (registersWritten[src1] || registersWritten[src2])
+//                continue;
             if (op == MUL) {
                 if (buf4.size() >= 2) {
                     continue;
@@ -138,7 +150,7 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
                 buf3.push_back(*pBuf1Iter);
             }
             removeInstruction(buf1, (*pBuf1Iter)->address);
-            registersWritten[dest] = true;
+            //registersWritten[dest] = true;
             continue;
         }
         if (op == LW) {
@@ -172,6 +184,13 @@ void State::multiply() {
 }
 
 void State::writeBack(std::array<bool, 32> &registersWritten) {
+    int currentAddress = 0;
+    auto removeDependency = [&currentAddress](int dAddress){return currentAddress == dAddress;};
+    auto removeDependencies = [removeDependency](Instruction *e){
+        auto removeIter = std::find_if(e->dependencies.begin(), e->dependencies.end(), removeDependency);
+        if (removeIter != e->dependencies.end())
+            e->dependencies.erase(removeIter);
+    };
     if (buf8) {
         currentInstruction = buf8;
         calculate();
@@ -180,6 +199,11 @@ void State::writeBack(std::array<bool, 32> &registersWritten) {
         currentInstruction = buf6;
         registersWritten[buf6->args[0]] = false;
         calculate();
+        currentAddress = buf6->address;
+        for (auto e : buf1) {
+            removeDependencies(e);
+        }
+        removeDependencies(waitInstruction);
     }
     if (buf10) {
         currentInstruction = buf10;
@@ -194,30 +218,29 @@ void State::cleanUp() {
 }
 
 void State::calculate1() {
-    int src1 = currentInstruction->args[0];
-    int src2 = currentInstruction->args[1];
-    int src3 = currentInstruction->args[2];
+    auto &args = currentInstruction->args;
+    int intermediate = currentInstruction->immediate;
     switch (currentInstruction->opCode) {
         case J:
-            address = src1;
+            address = intermediate;
             break;
         case BEQ:
-            if (registers[src1] == registers[src2])
-                address += src3;
+            if (registers[args[0]] == registers[args[1]])
+                address += intermediate;
             break;
         case BNE:
-            if (registers[src1] != registers[src2])
-                address += src3;
+            if (registers[args[0]] != registers[args[1]])
+                address += intermediate;
             break;
         case BGTZ:
-            if (registers[src1] > 0)
-                address += src2;
+            if (registers[args[0]] > 0)
+                address += intermediate;
             break;
         case SW:
-            data[registers[src1] + src3] = registers[src2];
+            data[registers[args[0]] + intermediate] = registers[args[1]];
             break;
         case LW:
-            registers[src2] = data[registers[src1] + src3];
+            registers[args[1]] = data[registers[args[0]] + intermediate];
             break;
         case BREAK:
             foundBreak = true;
@@ -231,7 +254,7 @@ void State::calculate2() {
     // dest src1 src2
     int dest = currentInstruction->args[0];
     int src1 = currentInstruction->args[1];
-    int src2 = currentInstruction->args[2];
+    int src2 = currentInstruction->args.size() > 2 ? currentInstruction->args[2] : currentInstruction->immediate;
     switch (currentInstruction->opCode) {
         case ADD:
             registers[dest] = registers[src1] + registers[src2];
@@ -263,7 +286,7 @@ void State::calculate3() {
     // dest src1 imm
     int dest = currentInstruction->args[0];
     int src1 = currentInstruction->args[1];
-    int immediate = currentInstruction->args[2];
+    int immediate = currentInstruction->immediate;
     switch (currentInstruction->opCode) {
         case ADDI:
             registers[dest] = registers[src1] + immediate;
@@ -279,8 +302,10 @@ void State::calculate3() {
     }
 }
 
-Instruction::Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int intermediate) :
-        name(std::move(name)), address(address), opCode(opCode), category(category), args(std::move(args)), intermediate(intermediate) {}
+Instruction::Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int immediate) :
+        name(std::move(name)), address(address), opCode(opCode), category(category), args(std::move(args)), immediate(immediate) {}
+
+Instruction::Instruction() = default;
 
 struct OpCodeMap {
     const std::unordered_map<std::string, std::pair<std::string, OpCodes>> cat1 = {
@@ -314,38 +339,40 @@ void category1(OpCodeMap &opCodeMap, const std::string &line,
     auto opCodePair = opCodeMap.cat1.at(binaryOpCode);
     std::stringstream instructionString;
     instructionString << opCodePair.first;
-    int src1 = 0, src2 = 0, src3 = 0, intermediate = 0;
+    int src1, src2, immediate = 0;
     std::vector<int> args;
     switch (opCodePair.second) {
         case J: {
-            intermediate = std::stoi(line.substr(6, 26), nullptr, 2);
-            intermediate = src1 << 2;
-            instructionString << " #" << src1;
+            immediate = std::stoi(line.substr(6, 26), nullptr, 2);
+            immediate = immediate << 2;
+            instructionString << " #" << immediate;
             break;
         }
         case BNE:
         case BEQ: {
             src1 = std::stoi(line.substr(6, 5), nullptr, 2);
             src2 = std::stoi(line.substr(11, 5), nullptr, 2);
-            intermediate = std::stoi(line.substr(16, 16), nullptr, 2);
-            intermediate = intermediate << 2;
-            instructionString << " R" << src1 << ", R" << src2 << ", #" << src3;
+            immediate = std::stoi(line.substr(16, 16), nullptr, 2);
+            immediate = immediate << 2;
+            instructionString << " R" << src1 << ", R" << src2 << ", #" << immediate;
             args.insert(args.end(), {src1, src2});
             break;
         }
         case BGTZ: {
             src1 = std::stoi(line.substr(6, 5), nullptr, 2);
-            src2 = std::stoi(line.substr(16, 16), nullptr, 2);
-            src2 = src2 << 2;
-            instructionString << " R" << src1 << ", #" << src2;
+            immediate = std::stoi(line.substr(16, 16), nullptr, 2);
+            immediate = immediate << 2;
+            instructionString << " R" << src1 << ", #" << immediate;
+            args.push_back(src1);
             break;
         }
         case LW:
         case SW: {
             src1 = std::stoi(line.substr(6, 5), nullptr, 2);
             src2 = std::stoi(line.substr(11, 5), nullptr, 2);
-            src3 = (int16_t) std::stoi(line.substr(16, 16), nullptr, 2); // signed
-            instructionString << " R" << src2 << ", " << src3 << "(R" << src1 << ")";
+            immediate = (int16_t) std::stoi(line.substr(16, 16), nullptr, 2); // signed
+            instructionString << " R" << src2 << ", " << immediate << "(R" << src1 << ")";
+            args.insert(args.end(), {src1, src2});
             break;
         }
         case BREAK: {
@@ -354,7 +381,7 @@ void category1(OpCodeMap &opCodeMap, const std::string &line,
         default:
             break;
     }
-    Instruction instruction(instructionString.str(), address, opCodePair.second, 1, {src1, src2, src3});
+    Instruction instruction(instructionString.str(), address, opCodePair.second, 1, args, immediate);
     instructions.emplace(address, instruction);
 
 }
@@ -368,15 +395,17 @@ void category2(OpCodeMap &opCodeMap, const std::string &line,
     int dest = std::stoi(line.substr(6, 5), nullptr, 2);
     int src1 = std::stoi(line.substr(11, 5), nullptr, 2);
     int src2 = std::stoi(line.substr(16, 5), nullptr, 2);
+    Instruction instruction;
     switch (opCodePair.second) {
         case SRL:
         case SRA:
             instructionString << "R" << dest << ", R" << src1 << ", #" << src2;
+            instruction = Instruction(instructionString.str(), address, opCodePair.second, 2, {dest, src1}, src2);
             break;
         default:
             instructionString << "R" << dest << ", R" << src1 << ", R" << src2;
+            instruction = Instruction(instructionString.str(), address, opCodePair.second, 2, {dest, src1, src2});
     }
-    Instruction instruction(instructionString.str(), address, opCodePair.second, 2, {dest, src1, src2});
     instructions.emplace(address, instruction);
 }
 
@@ -393,7 +422,7 @@ void category3(OpCodeMap &opCodeMap, const std::string &line,
         immediate = (int16_t) immediate;
     }
     instructionString << "R" << dest << ", R" << src1 << ", #" << immediate;
-    Instruction instruction(instructionString.str(), address, opCodePair.second, 3, {dest, src1, immediate});
+    Instruction instruction(instructionString.str(), address, opCodePair.second, 3, {dest, src1}, immediate);
     instructions.emplace(address, instruction);
 }
 void State::writeRegisters(std::ofstream &simFile) {
