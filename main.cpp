@@ -18,9 +18,11 @@ struct Instruction {
     OpCodes opCode;
     int category;
     std::vector<int> args;
+    int intermediate;
+    std::vector<int> dependencies;
     int address;
 
-    Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args);
+    Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int intermediate = 0);
 };
 
 class State {
@@ -28,6 +30,7 @@ class State {
     Instruction *currentInstruction = nullptr;
     Instruction *waitInstruction = nullptr;
     Instruction *exeInstruction = nullptr;
+    std::vector<int> branchDependencies;
     std::deque<Instruction*> buf1;
     std::deque<Instruction*> buf2;
     std::deque<Instruction*> buf3;
@@ -42,7 +45,6 @@ class State {
     void calculate2();
     void calculate3();
     void calculate();
-    static bool isBranch(Instruction &instruction);
 public:
     std::array<int, 32> registers = {};
     std::unordered_map<int, int> data;
@@ -53,7 +55,7 @@ public:
     void loadAndStore();
     void arithmetic(State &prevStat);
     void multiply();
-    void writeBack();
+    void writeBack(std::array<bool, 32> &registersWritten);
     void writeRegisters(std::ofstream &simFile);
     void writeData(std::ofstream &simFile);
     void writeState(std::ofstream &simFile);
@@ -76,15 +78,26 @@ void State::calculate() {
             break;
     }
 }
-bool State::isBranch(Instruction &instruction) {
+bool isBranch(Instruction &instruction) {
     OpCodes op = instruction.opCode;
     return op == J || op == BEQ || op == BNE || op == BGTZ;
+}
+void findDependencies(Instruction &instruction, std::deque<Instruction*> &buf){
+    OpCodes op = instruction.opCode;
+    switch(op) {
+        case SW:
+
+            break;
+        default:
+            break;
+    }
 }
 
 void State::fetch(std::unordered_map<int, Instruction> &instructions) {
     for (int i = 0; i < 4; ++i) {
         Instruction &instruction = instructions.at(address);
         if(buf1.size() < 8 && waitInstruction == nullptr && !foundBreak) {
+            findDependencies(instruction, buf1);
             if (isBranch(instruction)) {
                 waitInstruction = &instruction;
             } else {
@@ -110,7 +123,7 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
         int src1 = (*pBuf1Iter)->args[1];
         int src2 = (*pBuf1Iter)->args[2];
         if (op != LW && op != SW) {
-            // RAW
+            // RAW && WAW
             if (registersWritten[src1] || registersWritten[src2])
                 continue;
             if (op == MUL) {
@@ -125,9 +138,6 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
                 buf3.push_back(*pBuf1Iter);
             }
             removeInstruction(buf1, (*pBuf1Iter)->address);
-//            auto findAddress = [pBuf1Iter](Instruction *instruction) {return instruction->address == (*pBuf1Iter)->address;};
-//            auto removeIter = std::find_if(buf1.begin(), buf1.end(), findAddress);
-//            buf1.erase(removeIter);
             registersWritten[dest] = true;
             continue;
         }
@@ -161,13 +171,14 @@ void State::multiply() {
 
 }
 
-void State::writeBack() {
+void State::writeBack(std::array<bool, 32> &registersWritten) {
     if (buf8) {
         currentInstruction = buf8;
         calculate();
     }
     if (buf6) {
         currentInstruction = buf6;
+        registersWritten[buf6->args[0]] = false;
         calculate();
     }
     if (buf10) {
@@ -268,8 +279,8 @@ void State::calculate3() {
     }
 }
 
-Instruction::Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args) :
-        name(std::move(name)), address(address), opCode(opCode), category(category), args(std::move(args)) {}
+Instruction::Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int intermediate) :
+        name(std::move(name)), address(address), opCode(opCode), category(category), args(std::move(args)), intermediate(intermediate) {}
 
 struct OpCodeMap {
     const std::unordered_map<std::string, std::pair<std::string, OpCodes>> cat1 = {
@@ -303,11 +314,12 @@ void category1(OpCodeMap &opCodeMap, const std::string &line,
     auto opCodePair = opCodeMap.cat1.at(binaryOpCode);
     std::stringstream instructionString;
     instructionString << opCodePair.first;
-    int src1 = 0, src2 = 0, src3 = 0;
+    int src1 = 0, src2 = 0, src3 = 0, intermediate = 0;
+    std::vector<int> args;
     switch (opCodePair.second) {
         case J: {
-            src1 = std::stoi(line.substr(6, 26), nullptr, 2);
-            src1 = src1 << 2;
+            intermediate = std::stoi(line.substr(6, 26), nullptr, 2);
+            intermediate = src1 << 2;
             instructionString << " #" << src1;
             break;
         }
@@ -315,9 +327,10 @@ void category1(OpCodeMap &opCodeMap, const std::string &line,
         case BEQ: {
             src1 = std::stoi(line.substr(6, 5), nullptr, 2);
             src2 = std::stoi(line.substr(11, 5), nullptr, 2);
-            src3 = std::stoi(line.substr(16, 16), nullptr, 2);
-            src3 = src3 << 2;
+            intermediate = std::stoi(line.substr(16, 16), nullptr, 2);
+            intermediate = intermediate << 2;
             instructionString << " R" << src1 << ", R" << src2 << ", #" << src3;
+            args.insert(args.end(), {src1, src2});
             break;
         }
         case BGTZ: {
@@ -498,7 +511,7 @@ int main(int argc, char** argv) {
         state.loadAndStore();
         state.arithmetic(prevState);
         state.multiply();
-        state.writeBack();
+        state.writeBack(registersWritten);
         state.writeState(simFile);
         state.writeRegisters(simFile);
         state.writeData(simFile);
