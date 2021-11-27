@@ -51,7 +51,7 @@ public:
     int firstDataAddress = 0;
     void fetch(std::unordered_map<int, Instruction> &instructions, State &prevStat);
     void issue(State &prevStat, std::array<bool, 32> &registersWritten);
-    void loadAndStore();
+    void loadAndStore(State &prevStat);
     void arithmetic(State &prevStat);
     void multiply();
     void writeBack(std::array<bool, 32> &registersWritten);
@@ -60,6 +60,8 @@ public:
     void writeState(std::ofstream &simFile);
 
     void cleanUp();
+
+    void removeDependencies(int currentAddress);
 };
 
 void removeInstruction(std::deque<Instruction> &buf, int address);
@@ -172,8 +174,23 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
     }
 }
 
-void State::loadAndStore() {
-
+void State::loadAndStore(State &prevStat) {
+    // ALU 1
+    auto &pBuf2 = prevStat.buf2;
+    if (!pBuf2.empty()) {
+        buf5 = pBuf2.front();
+        removeInstruction(buf2, buf5.address);
+    }
+    // MEM
+    auto &pBuf5 = prevStat.buf5;
+    if (!pBuf5.empty) {
+        if (pBuf5.opCode == LW) {
+            buf8 = pBuf5;
+        } else {
+            calculate(pBuf5);
+        }
+        //pBuf5.empty = true;
+    }
 }
 
 void removeInstruction(std::deque<Instruction> &buf, int address) {
@@ -183,6 +200,7 @@ void removeInstruction(std::deque<Instruction> &buf, int address) {
 }
 
 void State::arithmetic(State &prevStat) {
+    // ALU 2
     auto &pBuf3 = prevStat.buf3;
     if (pBuf3.empty())
         return;
@@ -193,35 +211,48 @@ void State::arithmetic(State &prevStat) {
 void State::multiply() {
 
 }
-
-void State::writeBack(std::array<bool, 32> &registersWritten) {
-    int currentAddress = 0;
+void State::removeDependencies(int currentAddress) {
     auto removeDependency = [&currentAddress](int dAddress){return currentAddress == dAddress;};
-    auto removeDependencies = [removeDependency](Instruction &e){
+    for (auto &e : buf1) {
         auto removeIter = std::find_if(e.dependencies.begin(), e.dependencies.end(), removeDependency);
         if (removeIter != e.dependencies.end())
             e.dependencies.erase(removeIter);
-    };
+    }
+    auto removeIter = std::find_if(waitInstruction.dependencies.begin(), waitInstruction.dependencies.end(), removeDependency);
+    if (removeIter != waitInstruction.dependencies.end())
+        waitInstruction.dependencies.erase(removeIter);
+}
+
+void State::writeBack(std::array<bool, 32> &registersWritten) {
+    int currentAddress = 0;
+/*    auto removeDependency = [&currentAddress](int dAddress){return currentAddress == dAddress;};
+    auto removeDependencies = [removeDependency, this](){
+        for (auto e : buf1) {
+            auto removeIter = std::find_if(e.dependencies.begin(), e.dependencies.end(), removeDependency);
+            if (removeIter != e.dependencies.end())
+                e.dependencies.erase(removeIter);
+        }
+        if (!waitInstruction.empty)
+            removeDependencies(waitInstruction);
+    };*/
     if (!buf8.empty) {
         calculate(buf8);
+        removeDependencies(buf8.address);
     }
     if (!buf6.empty) {
         registersWritten[buf6.args[0]] = false;
         calculate(buf6);
-        currentAddress = buf6.address;
-        for (auto e : buf1) {
-            removeDependencies(e);
-        }
-        if (!waitInstruction.empty)
-            removeDependencies(waitInstruction);
+        removeDependencies(buf6.address);
     }
     if (!buf10.empty) {
         calculate(buf10);
+        removeDependencies(buf10.address);
     }
 }
 
 void State::cleanUp() {
     buf8.empty = true;
+    buf5.empty = true;
     buf6.empty = true;
     buf10.empty = true;
     exeInstruction.empty = true;
@@ -547,7 +578,7 @@ int main(int argc, char** argv) {
         simFile << "Cycle " << cycle << ':' << "\n\n";
         state.fetch(instructions, prevState);
         state.issue(prevState, registersWritten);
-        state.loadAndStore();
+        state.loadAndStore(prevState);
         state.arithmetic(prevState);
         state.multiply();
         prevState = state;
