@@ -53,7 +53,7 @@ public:
     void issue(State &prevStat, std::array<bool, 32> &registersWritten);
     void loadAndStore(State &prevStat);
     void arithmetic(State &prevStat);
-    void multiply();
+    void multiply(State &prevStat);
     void writeBack(std::array<bool, 32> &registersWritten);
     void writeRegisters(std::ofstream &simFile);
     void writeData(std::ofstream &simFile);
@@ -96,6 +96,7 @@ void findDependencies(Instruction &instruction, std::deque<Instruction> &buf){
         if (std::any_of(args.begin(), args.end(),[dependency](auto arg){return arg == dependency;})) {
             instruction.dependencies.push_back(bufInstruction.address);
         }
+
     }
 }
 
@@ -108,7 +109,6 @@ void State::fetch(std::unordered_map<int, Instruction> &instructions, State &pre
                 if (instruction.dependencies.empty()) {
                     exeInstruction = instruction;
                     exeInstruction.empty = false;
-                    return;
                 } else {
                     waitInstruction = instruction;
                     waitInstruction.empty = false;
@@ -132,9 +132,6 @@ void State::fetch(std::unordered_map<int, Instruction> &instructions, State &pre
 
 void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
     auto &pBuf1 = prevStat.buf1;
-    auto &prevBuf2 = prevStat.buf2;
-    auto &prevBuf3 = prevStat.buf3;
-    auto &prevBuf4 = prevStat.buf4;
     auto pBuf1Iter = pBuf1.begin();
     for (int i = 0; i < 6; ++i, ++pBuf1Iter) {
         if (pBuf1Iter == pBuf1.end())
@@ -189,7 +186,6 @@ void State::loadAndStore(State &prevStat) {
         } else {
             calculate(pBuf5);
         }
-        //pBuf5.empty = true;
     }
 }
 
@@ -208,8 +204,23 @@ void State::arithmetic(State &prevStat) {
     removeInstruction(buf3, buf6.address);
 }
 
-void State::multiply() {
-
+void State::multiply(State &prevStat) {
+    // MUL1
+    auto &pBuf4 = prevStat.buf4;
+    if (!pBuf4.empty()) {
+        buf7 = pBuf4.front();
+        removeInstruction(buf4, buf7.address);
+    }
+    // MUL2
+    auto &pBuf7 = prevStat.buf7;
+    if (!pBuf7.empty) {
+        buf9 = pBuf7;
+    }
+    // MUL3
+    auto &pBuf9 = prevStat.buf9;
+    if (!pBuf9.empty) {
+        buf10 = pBuf9;
+    }
 }
 void State::removeDependencies(int currentAddress) {
     auto removeDependency = [&currentAddress](int dAddress){return currentAddress == dAddress;};
@@ -224,17 +235,6 @@ void State::removeDependencies(int currentAddress) {
 }
 
 void State::writeBack(std::array<bool, 32> &registersWritten) {
-    int currentAddress = 0;
-/*    auto removeDependency = [&currentAddress](int dAddress){return currentAddress == dAddress;};
-    auto removeDependencies = [removeDependency, this](){
-        for (auto e : buf1) {
-            auto removeIter = std::find_if(e.dependencies.begin(), e.dependencies.end(), removeDependency);
-            if (removeIter != e.dependencies.end())
-                e.dependencies.erase(removeIter);
-        }
-        if (!waitInstruction.empty)
-            removeDependencies(waitInstruction);
-    };*/
     if (!buf8.empty) {
         calculate(buf8);
         removeDependencies(buf8.address);
@@ -255,6 +255,8 @@ void State::cleanUp() {
     buf5.empty = true;
     buf6.empty = true;
     buf10.empty = true;
+    buf7.empty = true;
+    buf9.empty = true;
     exeInstruction.empty = true;
 }
 
@@ -573,14 +575,14 @@ int main(int argc, char** argv) {
 
     State prevState = state;
     std::array<bool, 32> registersWritten = {};
-    for (int i = 0; i < 20; ++i) {
+    for (int i = 0; i < 60; ++i) {
         simFile << std::string(20, '-') << '\n';
         simFile << "Cycle " << cycle << ':' << "\n\n";
         state.fetch(instructions, prevState);
         state.issue(prevState, registersWritten);
         state.loadAndStore(prevState);
         state.arithmetic(prevState);
-        state.multiply();
+        state.multiply(prevState);
         prevState = state;
         state.writeBack(registersWritten);
         state.writeState(simFile);
