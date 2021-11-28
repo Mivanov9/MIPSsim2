@@ -61,7 +61,7 @@ public:
     void writeData(std::ofstream &simFile);
     void writeState(std::ofstream &simFile);
 
-    void cleanUp(State &prevStat);
+    void cleanUp();
 
     void removeDependencies(int currentAddress);
 
@@ -330,7 +330,7 @@ bool State::writeBack(State &prevStat) {
     return true;
 }
 
-void State::cleanUp(State &prevStat) {
+void State::cleanUp() {
     buf8.empty = true;
     buf5.empty = true;
     buf6.empty = true;
@@ -614,7 +614,7 @@ void decodeData(State &state, std::vector<std::string> &binaryInstructions, OpCo
             else if (category == "010")
                 category3(opCodeMap, binaryLine, instructions, state.address);
         } else {
-            // Todo might need to add a break
+            break;
         }
         state.address += 4;
     }
@@ -655,7 +655,7 @@ int main(int argc, char** argv) {
         state.writeRegisters(simFile);
         state.writeData(simFile);
         running = state.writeBack(prevState);
-        state.cleanUp(prevState);
+        state.cleanUp();
         cycle++;
     }
     simFile.close();
