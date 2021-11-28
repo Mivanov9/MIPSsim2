@@ -66,9 +66,9 @@ public:
 
     void findDependencies(Instruction &instruction);
 
-    void findDependencies(std::deque<Instruction> &buf, Instruction &instruction);
+    static void findDependencies(std::deque<Instruction> &buf, Instruction &instruction);
 
-    void findDependencies(Instruction &buf, Instruction &instruction);
+    static void findDependencies(Instruction &buf, Instruction &instruction);
 };
 
 void removeInstruction(std::deque<Instruction> &buf, int address);
@@ -206,6 +206,7 @@ void State::fetch(std::unordered_map<int, Instruction> &instructions, State &pre
     }
     if (!prevStat.waitInstruction.empty && !waitInstruction.empty && prevStat.waitInstruction.dependencies.empty()) {
         exeInstruction = waitInstruction;
+        calculate(exeInstruction);
         waitInstruction.empty = true;
     }
 }
@@ -656,7 +657,7 @@ int main(int argc, char** argv) {
 
     State prevState = state;
     std::array<bool, 32> registersWritten = {};
-    for (int i = 0; i < 60; ++i) {
+    for (int i = 0; i < 62; ++i) {
         simFile << std::string(20, '-') << '\n';
         simFile << "Cycle " << cycle << ':' << "\n\n";
         state.fetch(instructions, prevState);
@@ -665,10 +666,10 @@ int main(int argc, char** argv) {
         state.arithmetic(prevState);
         state.multiply(prevState);
         prevState = state;
-        state.writeBack(prevState);
         state.writeState(simFile);
         state.writeRegisters(simFile);
         state.writeData(simFile);
+        state.writeBack(prevState);
         state.cleanUp(prevState);
         cycle++;
     }
