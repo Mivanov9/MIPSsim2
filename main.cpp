@@ -23,6 +23,7 @@ struct Instruction {
     std::set<int> dependencies;
     int address{};
     bool empty = true;
+    int result = 0;
     Instruction();
     Instruction(std::string name, int address, OpCodes opCode, int category, std::vector<int> args, int immediate = 0);
 };
@@ -41,10 +42,10 @@ class State {
     Instruction buf8;
     Instruction buf9;
     Instruction buf10;
-    void calculate1(Instruction &instruction);
-    void calculate2(Instruction &instruction);
-    void calculate3(Instruction &instruction);
-    void calculate(Instruction &instruction);
+    int calculate1(Instruction &instruction);
+    int calculate2(Instruction &instruction);
+    int calculate3(Instruction &instruction);
+    int calculate(Instruction &instruction);
 public:
     std::array<int, 32> registers = {};
     std::unordered_map<int, int> data;
@@ -73,18 +74,16 @@ public:
 
 void removeInstruction(std::deque<Instruction> &buf, int address);
 
-void State::calculate(Instruction &instruction) {
+int State::calculate(Instruction &instruction) {
     switch (instruction.category) {
         case 1:
-            calculate1(instruction);
-            break;
+            return calculate1(instruction);
         case 2:
-            calculate2(instruction);
-            break;
+            return calculate2(instruction);
         case 3:
-            calculate3(instruction);
-            break;
+            return calculate3(instruction);
     }
+    return 0;
 }
 bool isBranch(Instruction &instruction) {
     OpCodes op = instruction.opCode;
@@ -161,7 +160,7 @@ void State::findDependencies(Instruction &instruction){
 
 }
 
-bool findW(const std::deque<Instruction>::iterator& iter, std::deque<Instruction> &buf){
+bool findWHazards(const std::deque<Instruction>::iterator& iter, std::deque<Instruction> &buf){
     auto &instruction = *iter;
     for (auto start = buf.begin(); start < iter; start++) {
         auto bufInstruction = *start;
@@ -219,7 +218,7 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
             return;
         if (!pBuf1Iter->dependencies.empty())
             continue;
-        if (findW(pBuf1Iter, pBuf1))
+        if (findWHazards(pBuf1Iter, pBuf1))
             continue;
         auto op = (*pBuf1Iter).opCode;
         if (op != LW && op != SW) {
@@ -254,6 +253,12 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
     }
 }
 
+void removeInstruction(std::deque<Instruction> &buf, int address) {
+    auto findAddress = [address](Instruction &instruction) {return instruction.address == address;};
+    auto removeIter = std::find_if(buf.begin(), buf.end(), findAddress);
+    buf.erase(removeIter);
+}
+
 void State::loadAndStore(State &prevStat) {
     // ALU 1
     auto &pBuf2 = prevStat.buf2;
@@ -266,16 +271,14 @@ void State::loadAndStore(State &prevStat) {
     if (!pBuf5.empty) {
         if (pBuf5.opCode == LW) {
             buf8 = pBuf5;
+            buf8.result = calculate(buf8);
+            std::stringstream s;
+            s << buf8.result << ", R" << buf8.args[1];
+            buf8.name = s.str();
         } else {
             calculate(pBuf5);
         }
     }
-}
-
-void removeInstruction(std::deque<Instruction> &buf, int address) {
-    auto findAddress = [address](Instruction &instruction) {return instruction.address == address;};
-    auto removeIter = std::find_if(buf.begin(), buf.end(), findAddress);
-    buf.erase(removeIter);
 }
 
 void State::arithmetic(State &prevStat) {
@@ -284,6 +287,10 @@ void State::arithmetic(State &prevStat) {
     if (pBuf3.empty())
         return;
     buf6 = pBuf3.front();
+    buf6.result = calculate(buf6);
+    std::stringstream s;
+    s << buf6.result << ", R" << buf6.args[0];
+    buf6.name = s.str();
     removeInstruction(buf3, buf6.address);
 }
 
@@ -303,6 +310,10 @@ void State::multiply(State &prevStat) {
     auto &pBuf9 = prevStat.buf9;
     if (!pBuf9.empty) {
         buf10 = pBuf9;
+        buf10.result = calculate(buf10);
+        std::stringstream s;
+        s << buf10.result << ", R" << buf10.args[0];
+        buf10.name = s.str();
     }
 }
 void State::removeDependencies(int currentAddress) {
@@ -319,15 +330,15 @@ void State::removeDependencies(int currentAddress) {
 
 void State::writeBack(State &prevStat) {
     if (!prevStat.buf8.empty) {
-        calculate(prevStat.buf8);
+        registers[prevStat.buf8.args[1]] = prevStat.buf8.result;
         removeDependencies(prevStat.buf8.address);
     }
     if (!prevStat.buf6.empty) {
-        calculate(prevStat.buf6);
+        registers[prevStat.buf6.args[0]] = prevStat.buf6.result;
         removeDependencies(prevStat.buf6.address);
     }
     if (!prevStat.buf10.empty) {
-        calculate(prevStat.buf10);
+        registers[prevStat.buf10.args[0]] = prevStat.buf10.result;
         removeDependencies(prevStat.buf10.address);
     }
 }
@@ -342,88 +353,78 @@ void State::cleanUp(State &prevStat) {
     exeInstruction.empty = true;
 }
 
-void State::calculate1(Instruction &instruction) {
+int State::calculate1(Instruction &instruction) {
     auto &args = instruction.args;
     int intermediate = instruction.immediate;
     switch (instruction.opCode) {
         case J:
             address = intermediate;
-            break;
+            return 0;
         case BEQ:
             if (registers[args[0]] == registers[args[1]])
                 address += intermediate;
-            break;
+            return 0;
         case BNE:
             if (registers[args[0]] != registers[args[1]])
                 address += intermediate;
-            break;
+            return 0;
         case BGTZ:
             if (registers[args[0]] > 0)
                 address += intermediate;
-            break;
+            return 0;
         case SW:
             data[registers[args[0]] + intermediate] = registers[args[1]];
-            break;
+            return 0;
         case LW:
-            registers[args[1]] = data[registers[args[0]] + intermediate];
-            break;
+            //registers[args[1]] = data[registers[args[0]] + intermediate];
+            return data[registers[args[0]] + intermediate];
         case BREAK:
             foundBreak = true;
-            break;
+            return 0;
         default:
-            break;
+            return 0;
     }
 }
 
-void State::calculate2(Instruction &instruction) {
+int State::calculate2(Instruction &instruction) {
     // dest src1 src2
     int dest = instruction.args[0];
     int src1 = instruction.args[1];
     int src2 = instruction.args.size() > 2 ? instruction.args[2] : instruction.immediate;
     switch (instruction.opCode) {
         case ADD:
-            registers[dest] = registers[src1] + registers[src2];
-            break;
+            return registers[src1] + registers[src2];
         case SUB:
-            registers[dest] = registers[src1] - registers[src2];
-            break;
+            return registers[src1] - registers[src2];
         case AND:
-            registers[dest] = registers[src1] & registers[src2];
-            break;
+            return registers[src1] & registers[src2];
         case OR:
-            registers[dest] = registers[src1] | registers[src2];
-            break;
+            return registers[src1] | registers[src2];
         case SRL:
-            registers[dest] = registers[src1] << src2;
-            break;
+            return registers[src1] << src2;
         case SRA:
-            registers[dest] = registers[src1] >> src2;
-            break;
+            return registers[src1] >> src2;
         case MUL:
-            registers[dest] = registers[src1] * registers[src2];
-            break;
+            return registers[src1] * registers[src2];
         default:
-            break;
+            return 0;
     }
 }
 
-void State::calculate3(Instruction &instruction) {
+int State::calculate3(Instruction &instruction) {
     // dest src1 imm
     int dest = instruction.args[0];
     int src1 = instruction.args[1];
     int immediate = instruction.immediate;
     switch (instruction.opCode) {
         case ADDI:
-            registers[dest] = registers[src1] + immediate;
-            break;
+            return registers[src1] + immediate;
         case ANDI:
-            registers[dest] = registers[src1] & immediate;
-            break;
+            return registers[src1] & immediate;
         case ORI:
-            registers[dest] = registers[src1] | immediate;
-            break;
+            return registers[src1] | immediate;
         default:
-            break;
+            return 0;
     }
 }
 
