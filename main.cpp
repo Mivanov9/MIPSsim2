@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <deque>
 #include <algorithm>
+#include <set>
 
 enum OpCodes {
     J, BEQ, BNE, BGTZ, SW, LW, BREAK, ADD, SUB, AND, OR, SRL, SRA, MUL, ADDI, ANDI, ORI
@@ -19,7 +20,7 @@ struct Instruction {
     int category{};
     std::vector<int> args;
     int immediate{};
-    std::vector<int> dependencies;
+    std::set<int> dependencies;
     int address{};
     bool empty = true;
     Instruction();
@@ -54,14 +55,20 @@ public:
     void loadAndStore(State &prevStat);
     void arithmetic(State &prevStat);
     void multiply(State &prevStat);
-    void writeBack(std::array<bool, 32> &registersWritten);
+    void writeBack(State &prevStat);
     void writeRegisters(std::ofstream &simFile);
     void writeData(std::ofstream &simFile);
     void writeState(std::ofstream &simFile);
 
-    void cleanUp();
+    void cleanUp(State &prevStat);
 
     void removeDependencies(int currentAddress);
+
+    void findDependencies(Instruction &instruction);
+
+    void findDependencies(std::deque<Instruction> &buf, Instruction &instruction);
+
+    void findDependencies(Instruction &buf, Instruction &instruction);
 };
 
 void removeInstruction(std::deque<Instruction> &buf, int address);
@@ -83,28 +90,101 @@ bool isBranch(Instruction &instruction) {
     OpCodes op = instruction.opCode;
     return op == J || op == BEQ || op == BNE || op == BGTZ;
 }
-void findDependencies(Instruction &instruction, std::deque<Instruction> &buf){
-    for (auto bufInstruction : buf) {
-        if (bufInstruction.args.empty() || (bufInstruction.category == 1 && bufInstruction.opCode != LW))
+void State::findDependencies(std::deque<Instruction> &buf, Instruction &instruction) {
+    for (auto bufInstruction: buf) {
+        if (bufInstruction.args.empty())
             continue;
         int dependency;
+        if (bufInstruction.category != 1 || bufInstruction.opCode == LW) {
+            if (bufInstruction.opCode == LW)
+                dependency = bufInstruction.args[1];
+            else
+                dependency = bufInstruction.args[0];
+            auto &args = instruction.args;
+            if (std::any_of(args.begin(), args.end(), [dependency](auto arg) { return arg == dependency; })) {
+                instruction.dependencies.insert(bufInstruction.address);
+            }
+        }
+    }
+}
+void State::findDependencies(Instruction &bufInstruction, Instruction &instruction) {
+    if (bufInstruction.args.empty() || bufInstruction.empty)
+        return;
+    int dependency;
+    if (bufInstruction.category != 1 || bufInstruction.opCode == LW) {
         if (bufInstruction.opCode == LW)
             dependency = bufInstruction.args[1];
         else
             dependency = bufInstruction.args[0];
         auto &args = instruction.args;
-        if (std::any_of(args.begin(), args.end(),[dependency](auto arg){return arg == dependency;})) {
-            instruction.dependencies.push_back(bufInstruction.address);
+        if (std::any_of(args.begin(), args.end(), [dependency](auto arg) { return arg == dependency; })) {
+            instruction.dependencies.insert(bufInstruction.address);
         }
-
     }
+}
+void State::findDependencies(Instruction &instruction){
+    findDependencies(buf1, instruction);
+    findDependencies(buf2, instruction);
+    findDependencies(buf3, instruction);
+    findDependencies(buf4, instruction);
+    findDependencies(buf5, instruction);
+    findDependencies(buf6, instruction);
+    findDependencies(buf7, instruction);
+    findDependencies(buf8, instruction);
+    findDependencies(buf9, instruction);
+    findDependencies(buf10, instruction);
+
+//    for (auto bufInstruction : buf1) {
+//        if (bufInstruction.args.empty())
+//            continue;
+//        int dependency;
+//        if (bufInstruction.category != 1 || bufInstruction.opCode == LW) {
+//            if (bufInstruction.opCode == LW)
+//                dependency = bufInstruction.args[1];
+//            else
+//                dependency = bufInstruction.args[0];
+//            auto &args = instruction.args;
+//            if (std::any_of(args.begin(), args.end(), [dependency](auto arg) { return arg == dependency; })) {
+//                instruction.dependencies.insert(bufInstruction.address);
+//            }
+//        }
+//        if (instruction.opCode == J)
+//            continue;
+//        if (instruction.opCode == LW)
+//            dependency = instruction.args[1];
+//        else
+//            dependency = instruction.args[0];
+//        auto &bufArgs = bufInstruction.args;
+//        if (std::any_of(bufArgs.begin(), bufArgs.end(),[dependency](auto arg){return arg == dependency;})) {
+//            instruction.dependencies.insert(bufInstruction.address);
+//        }
+
+}
+
+bool findW(const std::deque<Instruction>::iterator& iter, std::deque<Instruction> &buf){
+    auto &instruction = *iter;
+    for (auto start = buf.begin(); start < iter; start++) {
+        auto bufInstruction = *start;
+        if (instruction.address == bufInstruction.address)
+            continue;
+        int dependency;
+        if (instruction.opCode == J)
+            continue;
+        if (instruction.opCode == LW)
+            dependency = instruction.args[1];
+        else
+            dependency = instruction.args[0];
+        auto &bufArgs = bufInstruction.args;
+        return std::any_of(bufArgs.begin(), bufArgs.end(),[dependency](auto arg){return arg == dependency;});
+    }
+    return false;
 }
 
 void State::fetch(std::unordered_map<int, Instruction> &instructions, State &prevStat) {
     for (int i = 0; i < 4; ++i) {
-        Instruction &instruction = instructions.at(address);
+        Instruction instruction = instructions.at(address);
         if(buf1.size() < 8 && waitInstruction.empty && exeInstruction.empty && !foundBreak) {
-            findDependencies(instruction, buf1);
+            findDependencies(instruction);
             if (isBranch(instruction)) {
                 if (instruction.dependencies.empty()) {
                     exeInstruction = instruction;
@@ -137,6 +217,8 @@ void State::issue(State &prevStat, std::array<bool, 32> &registersWritten) {
         if (pBuf1Iter == pBuf1.end())
             return;
         if (!pBuf1Iter->dependencies.empty())
+            continue;
+        if (findW(pBuf1Iter, pBuf1))
             continue;
         auto op = (*pBuf1Iter).opCode;
         if (op != LW && op != SW) {
@@ -234,23 +316,22 @@ void State::removeDependencies(int currentAddress) {
         waitInstruction.dependencies.erase(removeIter);
 }
 
-void State::writeBack(std::array<bool, 32> &registersWritten) {
-    if (!buf8.empty) {
-        calculate(buf8);
-        removeDependencies(buf8.address);
+void State::writeBack(State &prevStat) {
+    if (!prevStat.buf8.empty) {
+        calculate(prevStat.buf8);
+        removeDependencies(prevStat.buf8.address);
     }
-    if (!buf6.empty) {
-        registersWritten[buf6.args[0]] = false;
-        calculate(buf6);
-        removeDependencies(buf6.address);
+    if (!prevStat.buf6.empty) {
+        calculate(prevStat.buf6);
+        removeDependencies(prevStat.buf6.address);
     }
-    if (!buf10.empty) {
-        calculate(buf10);
-        removeDependencies(buf10.address);
+    if (!prevStat.buf10.empty) {
+        calculate(prevStat.buf10);
+        removeDependencies(prevStat.buf10.address);
     }
 }
 
-void State::cleanUp() {
+void State::cleanUp(State &prevStat) {
     buf8.empty = true;
     buf5.empty = true;
     buf6.empty = true;
@@ -584,11 +665,11 @@ int main(int argc, char** argv) {
         state.arithmetic(prevState);
         state.multiply(prevState);
         prevState = state;
-        state.writeBack(registersWritten);
+        state.writeBack(prevState);
         state.writeState(simFile);
         state.writeRegisters(simFile);
         state.writeData(simFile);
-        state.cleanUp();
+        state.cleanUp(prevState);
         cycle++;
     }
     simFile.close();
